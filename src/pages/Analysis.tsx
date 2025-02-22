@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,7 +13,9 @@ const Analysis = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [detector, setDetector] = useState<poseDetection.PoseDetector | null>(null);
+  const [model, setModel] = useState<tf.LayersModel | null>(null);
   const [currentScore, setCurrentScore] = useState<number | null>(null);
+  const [postureIssues, setPostureIssues] = useState<string[]>([]);
   
   const startSession = async () => {
     try {
@@ -76,7 +77,7 @@ const Analysis = () => {
     }
   };
 
-  const saveMeasurement = async (score: number, positions: PositionData) => {
+  const saveMeasurement = async (score: number, positions: PositionData, issues: any) => {
     if (!sessionId) return;
 
     try {
@@ -89,7 +90,16 @@ const Analysis = () => {
         posture_score: score,
         head_position: positions.head,
         shoulder_position: positions.shoulders,
-        spine_alignment: positions.spine
+        spine_alignment: positions.spine,
+        head_tilt_detected: issues.headTilt,
+        shoulders_uneven: issues.shouldersUneven,
+        head_too_low: issues.headTooLow,
+        head_too_forward: issues.headTooForward,
+        neck_tilt_angle: issues.neckTiltAngle,
+        shoulder_angles: {
+          left: issues.leftShoulderAngle,
+          right: issues.rightShoulderAngle
+        }
       };
 
       const { error } = await supabase
@@ -98,8 +108,10 @@ const Analysis = () => {
 
       if (error) throw error;
       
-      // Update current score
       setCurrentScore(score);
+      setPostureIssues(Object.entries(issues)
+        .filter(([key, value]) => value === true)
+        .map(([key]) => key.replace(/([A-Z])/g, ' $1').trim()));
     } catch (error) {
       console.error('Error saving measurement:', error);
     }
@@ -112,6 +124,7 @@ const Analysis = () => {
       try {
         await tf.ready();
         
+        // Load both pose detector and our RL model
         const detectorConfig = {
           modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
         };
@@ -120,6 +133,10 @@ const Analysis = () => {
           detectorConfig
         );
         setDetector(detector);
+
+        // Load our trained RL model
+        const rlModel = await tf.loadLayersModel('posture_model.h5');
+        setModel(rlModel);
 
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { width: 1280, height: 720 } 
@@ -148,7 +165,7 @@ const Analysis = () => {
   }, []);
 
   useEffect(() => {
-    if (!detector || !videoRef.current || !canvasRef.current) return;
+    if (!detector || !model || !videoRef.current || !canvasRef.current) return;
 
     let animationFrame: number;
 
@@ -171,6 +188,7 @@ const Analysis = () => {
       if (poses.length > 0) {
         const pose = poses[0];
         
+        // Draw keypoints
         pose.keypoints.forEach(keypoint => {
           if (keypoint.score && keypoint.score > 0.3) {
             ctx.beginPath();
@@ -181,9 +199,17 @@ const Analysis = () => {
         });
 
         if (isAnalyzing) {
-          const score = calculatePostureScore(pose.keypoints);
+          const features = extractFeatures(pose.keypoints);
           const positions = extractPositions(pose.keypoints);
-          saveMeasurement(score, positions);
+          
+          // Get prediction from our RL model
+          const prediction = model.predict(tf.tensor2d([features])) as tf.Tensor;
+          const score = Math.round(prediction.dataSync()[0] * 100);
+          
+          // Calculate additional posture metrics
+          const issues = analyzePosture(pose.keypoints);
+          
+          saveMeasurement(score, positions, issues);
         }
       }
 
@@ -197,27 +223,97 @@ const Analysis = () => {
         cancelAnimationFrame(animationFrame);
       }
     };
-  }, [detector, isAnalyzing]);
+  }, [detector, model, isAnalyzing]);
 
-  const calculatePostureScore = (keypoints: poseDetection.Keypoint[]) => {
-    let score = 100;
-    
+  const extractFeatures = (keypoints: poseDetection.Keypoint[]) => {
     const nose = keypoints.find(kp => kp.name === 'nose');
     const leftShoulder = keypoints.find(kp => kp.name === 'left_shoulder');
     const rightShoulder = keypoints.find(kp => kp.name === 'right_shoulder');
+    const leftEar = keypoints.find(kp => kp.name === 'left_ear');
+    const rightEar = keypoints.find(kp => kp.name === 'right_ear');
     
-    if (nose && leftShoulder && rightShoulder) {
-      if (Math.abs(leftShoulder.y - rightShoulder.y) > 30) {
-        score -= 20;
-      }
-
-      const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
-      if (Math.abs(nose.x - midShoulderX) > 30) {
-        score -= 20;
-      }
+    if (!nose || !leftShoulder || !rightShoulder || !leftEar || !rightEar) {
+      return [0, 0, 0, 0, 0, 0, 0];
     }
 
-    return Math.max(0, score);
+    const midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+    const midShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+    
+    const distNoseShoulders = distance2D(nose.x, nose.y, midShoulderX, midShoulderY);
+    const shoulderWidth = distance2D(leftShoulder.x, leftShoulder.y, rightShoulder.x, rightShoulder.y);
+    const ratio = distNoseShoulders / shoulderWidth;
+    const neckTiltAngle = angleABC(leftEar.x, leftEar.y, nose.x, nose.y, rightEar.x, rightEar.y);
+    const distLeftEarNose = distance2D(leftEar.x, leftEar.y, nose.x, nose.y);
+    const distRightEarNose = distance2D(rightEar.x, rightEar.y, nose.x, nose.y);
+    const angleLeftShoulder = angleABC(leftEar.x, leftEar.y, leftShoulder.x, leftShoulder.y, nose.x, nose.y);
+    const angleRightShoulder = angleABC(rightEar.x, rightEar.y, rightShoulder.x, rightShoulder.y, nose.x, nose.y);
+
+    return [
+      distNoseShoulders,
+      ratio,
+      neckTiltAngle,
+      distLeftEarNose,
+      distRightEarNose,
+      angleLeftShoulder,
+      angleRightShoulder
+    ];
+  };
+
+  const distance2D = (x1: number, y1: number, x2: number, y2: number) => {
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  };
+
+  const angleABC = (Ax: number, Ay: number, Bx: number, By: number, Cx: number, Cy: number) => {
+    const ABx = Ax - Bx;
+    const ABy = Ay - By;
+    const CBx = Cx - Bx;
+    const CBy = Cy - By;
+    const dot = ABx * CBx + ABy * CBy;
+    const magAB = Math.sqrt(ABx ** 2 + ABy ** 2);
+    const magCB = Math.sqrt(CBx ** 2 + CBy ** 2);
+    if (magAB === 0 || magCB === 0) return 180;
+    const cosTheta = Math.min(Math.max(dot / (magAB * magCB), -1), 1);
+    return (Math.acos(cosTheta) * 180) / Math.PI;
+  };
+
+  const analyzePosture = (keypoints: poseDetection.Keypoint[]) => {
+    const nose = keypoints.find(kp => kp.name === 'nose');
+    const leftShoulder = keypoints.find(kp => kp.name === 'left_shoulder');
+    const rightShoulder = keypoints.find(kp => kp.name === 'right_shoulder');
+    const leftEar = keypoints.find(kp => kp.name === 'left_ear');
+    const rightEar = keypoints.find(kp => kp.name === 'right_ear');
+
+    if (!nose || !leftShoulder || !rightShoulder || !leftEar || !rightEar) {
+      return {
+        headTilt: false,
+        shouldersUneven: false,
+        headTooLow: false,
+        headTooForward: false,
+        neckTiltAngle: 0,
+        leftShoulderAngle: 0,
+        rightShoulderAngle: 0
+      };
+    }
+
+    const shoulderWidth = distance2D(leftShoulder.x, leftShoulder.y, rightShoulder.x, rightShoulder.y);
+    const headHeight = distance2D(nose.x, nose.y, (leftShoulder.x + rightShoulder.x) / 2, (leftShoulder.y + rightShoulder.y) / 2);
+    const earHeightDiff = Math.abs(leftEar.y - rightEar.y);
+    const shoulderHeightDiff = Math.abs(leftShoulder.y - rightShoulder.y);
+
+    const headTooLowThresh = shoulderWidth * 0.6;
+    const headTooFarThresh = shoulderWidth * 1.2;
+    const earLevelThresh = 15;
+    const shoulderLevelThresh = 20;
+
+    return {
+      headTilt: earHeightDiff > earLevelThresh,
+      shouldersUneven: shoulderHeightDiff > shoulderLevelThresh,
+      headTooLow: headHeight < headTooLowThresh,
+      headTooForward: headHeight > headTooFarThresh,
+      neckTiltAngle: angleABC(leftEar.x, leftEar.y, nose.x, nose.y, rightEar.x, rightEar.y),
+      leftShoulderAngle: angleABC(leftEar.x, leftEar.y, leftShoulder.x, leftShoulder.y, nose.x, nose.y),
+      rightShoulderAngle: angleABC(rightEar.x, rightEar.y, rightShoulder.x, rightShoulder.y, nose.x, nose.y)
+    };
   };
 
   const extractPositions = (keypoints: poseDetection.Keypoint[]): PositionData => {
@@ -246,9 +342,22 @@ const Analysis = () => {
         
         {currentScore !== null && isAnalyzing && (
           <Card className="w-full max-w-3xl p-6 mb-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold">Current Posture Score</h2>
-              <span className="text-4xl font-bold text-primary">{currentScore}</span>
+            <div className="flex flex-col space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold">Current Posture Score</h2>
+                <span className="text-4xl font-bold text-primary">{currentScore}</span>
+              </div>
+              
+              {postureIssues.length > 0 && (
+                <div className="mt-4">
+                  <h3 className="text-lg font-medium mb-2">Posture Issues Detected:</h3>
+                  <ul className="list-disc list-inside space-y-1">
+                    {postureIssues.map((issue, index) => (
+                      <li key={index} className="text-red-600">{issue}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </Card>
         )}

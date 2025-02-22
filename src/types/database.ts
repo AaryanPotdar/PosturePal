@@ -1,4 +1,3 @@
-
 export interface PostureSession {
   id: string;
   user_id: string;
@@ -41,6 +40,15 @@ export interface PostureMeasurement {
       score: number | null;
     } | null;
   } | null;
+  head_tilt_detected: boolean;
+  shoulders_uneven: boolean;
+  head_too_low: boolean;
+  head_too_forward: boolean;
+  neck_tilt_angle: number;
+  shoulder_angles: {
+    left: number;
+    right: number;
+  };
   created_at: string;
 }
 
@@ -83,6 +91,15 @@ export interface PostureMeasurementInsert {
       score: number | null;
     } | null;
   } | null;
+  head_tilt_detected?: boolean;
+  shoulders_uneven?: boolean;
+  head_too_low?: boolean;
+  head_too_forward?: boolean;
+  neck_tilt_angle?: number;
+  shoulder_angles?: {
+    left: number;
+    right: number;
+  };
 }
 
 export interface PositionData {
