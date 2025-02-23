@@ -50,7 +50,7 @@ const Home = () => {
   return (
     <div className="max-w-screen-xl mx-auto px-4 py-8 animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-neutral-900">PostureAI</h1>
+        <h1 className="text-3xl font-bold text-neutral-900">PosturePal</h1>
         <p className="text-neutral-600 mt-2">Your personal posture assistant</p>
       </div>
 
