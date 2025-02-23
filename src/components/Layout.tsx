@@ -1,4 +1,3 @@
-
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Home, Activity, PlayCircle, Settings, BarChart } from "lucide-react";
 
@@ -16,6 +15,18 @@ const Layout = () => {
 
   return (
     <div className="min-h-screen bg-neutral-100">
+      <header className="bg-white border-b border-neutral-200">
+        <div className="max-w-screen-xl mx-auto px-4">
+          <div className="h-16 flex items-center">
+            <img 
+              src="/pplogo.png" 
+              alt="PosturePal Logo" 
+              className="h-8 w-auto cursor-pointer"
+              onClick={() => navigate('/')}
+            />
+          </div>
+        </div>
+      </header>
       <main className="pb-20">
         <Outlet />
       </main>

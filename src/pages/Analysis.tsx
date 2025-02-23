@@ -37,7 +37,6 @@ const Analysis = () => {
   const [currentScore, setCurrentScore] = useState<number | null>(null);
   const [postureIssues, setPostureIssues] = useState<string[]>([]);
   const lastMeasurementTime = useRef<number | null>(null);
-  const lastIssuesUpdateTime = useRef<number | null>(null);
   const lastNotificationTime = useRef<number | null>(null);
   const notificationSound = useRef<HTMLAudioElement | null>(null);
   const lastMetrics = useRef<PostureMetrics | null>(null);
@@ -215,26 +214,50 @@ const Analysis = () => {
             }
           });
 
-          // Calculate and save measurements every second
-          const score = await calculatePostureScore(pose.keypoints);
+          // Extract positions first
           const positions = extractPositions(pose.keypoints);
           
-          // Update UI immediately
-          setCurrentScore(score);
-          
-          // Save to database every second
-          const now = Date.now();
-          if (!lastMeasurementTime.current || now - lastMeasurementTime.current >= 1000) {
-            await saveMeasurement(score, positions, postureIssues);
-            lastMeasurementTime.current = now;
+          // Calculate posture score and get issues
+          const result = await calculatePostureScore(pose.keypoints);
+          if (result) {
+            setCurrentScore(result.posture_score);
+            const currentIssues = result.posture_issues || [];
+            setPostureIssues(currentIssues);
+
+            // Save to database every second
+            const now = Date.now();
+            if (!lastMeasurementTime.current || now - lastMeasurementTime.current >= 1000) {
+              await saveMeasurement(result.posture_score, positions, currentIssues);
+              lastMeasurementTime.current = now;
+            }
+
+            // Check for low score and show notification
+            if (result.posture_score < 60 && (!lastNotificationTime.current || now - lastNotificationTime.current >= 10000)) {
+              notificationSound.current?.play().catch(err => console.error('Error playing sound:', err));
+              
+              toast({
+                variant: "destructive",
+                title: "⚠️ Poor Posture Alert!",
+                description: (
+                  <div className="space-y-2">
+                    <p className="font-bold text-lg">Score: {result.posture_score}</p>
+                    <p>Please adjust your position:</p>
+                    <ul className="list-disc pl-4">
+                      {currentIssues.map((issue, index) => (
+                        <li key={index}>{issue}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ),
+                duration: 5000,
+              });
+              lastNotificationTime.current = now;
+            }
           }
         }
-      } else {
-        // If not analyzing, just show the video feed
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       }
-
+      
+      // Always continue the animation loop
       animationFrame = requestAnimationFrame(detectPose);
     };
 
@@ -287,46 +310,13 @@ const Analysis = () => {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const result = await response.json();
-        setCurrentScore(result.posture_score);
-        
-        // Check for low score and show notification
-        const now = Date.now();
-        if (result.posture_score < 60 && (!lastNotificationTime.current || now - lastNotificationTime.current >= 10000)) {
-          // Play notification sound
-          notificationSound.current?.play().catch(err => console.error('Error playing sound:', err));
-          
-          toast({
-            variant: "destructive",
-            title: "⚠️ Poor Posture Alert!",
-            description: (
-              <div className="space-y-2">
-                <p className="font-bold text-lg">Score: {result.posture_score}</p>
-                <p>Please adjust your position:</p>
-                <ul className="list-disc pl-4">
-                  {result.posture_issues.map((issue, index) => (
-                    <li key={index}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            ),
-            duration: 5000, // Show for 5 seconds
-          });
-          lastNotificationTime.current = now;
-        }
-        
-        // Update posture issues every 2 seconds
-        if (!lastIssuesUpdateTime.current || now - lastIssuesUpdateTime.current >= 2000) {
-          setPostureIssues(result.posture_issues);
-          lastIssuesUpdateTime.current = now;
-        }
-        return result.posture_score;
+        return await response.json();
       } catch (error) {
         console.error('Error getting posture score from API:', error);
-        return 0; // Return 0 as a fallback score
+        return null;
       }
     }
-    return 0;
+    return null;
   };
   
   const extractPositions = (keypoints: poseDetection.Keypoint[]): PositionData => {
@@ -350,7 +340,7 @@ const Analysis = () => {
 
   // Initialize notification sound
   useEffect(() => {
-    notificationSound.current = new Audio('/notification.mp3');
+    notificationSound.current = new Audio('/notif.mp3');
     notificationSound.current.volume = 0.5;
   }, []);
 
