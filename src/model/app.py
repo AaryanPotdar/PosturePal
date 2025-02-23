@@ -3,9 +3,42 @@ from flask_cors import CORS
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import boto3
+import json
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")  # Change to your AWS region
+
+# Define a route to query Llama 3 through AWS Bedrock
+bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")  # Change to your AWS region
+
+# Define a route to query Mistral through AWS Bedrock
+@app.route('/query_mistral', methods=['POST'])
+def query_mistral():
+    try:
+        body = request.json
+        prompt_text = body.get("prompt", "Hello, Mistral!")
+        
+        payload = {
+            "prompt": f"<s>[INST] {prompt_text} [/INST]",
+            "max_tokens": 200,
+            "temperature": 0.5,
+            "top_p": 0.9,
+            "top_k": 50
+        }
+        
+        response = bedrock_client.invoke_model(
+            modelId="mistral.mistral-large-2402-v1:0",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(payload)
+        )
+        
+        response_body = json.loads(response["body"].read().decode("utf-8"))
+        return jsonify(response_body)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Load the trained model
 model = tf.keras.models.load_model("src/model/posture_model.h5")
