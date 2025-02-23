@@ -85,17 +85,51 @@ def predict_posture():
     if features is None:
         return jsonify({"error": "Invalid data"}), 400
 
-    # Prepare input for model
-    features = np.array([features])
+    # Get original coordinates for issue detection
+    vw, vh = safe_float(data["videoWidth"]), safe_float(data["videoHeight"])
+    lsho_x = safe_float(data["left_shoulder_x"])
+    rsho_x = safe_float(data["right_shoulder_x"])
+    lsho_y = safe_float(data["left_shoulder_y"])
+    rsho_y = safe_float(data["right_shoulder_y"])
+    nose_x = safe_float(data["nose_x"])
+    nose_y = safe_float(data["nose_y"])
+    lear_y = safe_float(data["left_ear_y"])
+    rear_y = safe_float(data["right_ear_y"])
 
-    # Predict posture
+    # Calculate measurements for issue detection
+    msho_x, msho_y = (lsho_x + rsho_x) / 2, (lsho_y + rsho_y) / 2
+    shoulder_width = distance2D(lsho_x, lsho_y, rsho_x, rsho_y)
+    head_height = distance2D(nose_x, nose_y, msho_x, msho_y)
+    ear_height_diff = abs(lear_y - rear_y)
+    shoulder_height_diff = abs(lsho_y - rsho_y)
+
+    # Define thresholds
+    head_too_low_thresh = shoulder_width * 0.6
+    head_too_far_thresh = shoulder_width * 1.2
+    ear_level_thresh = 15
+    shoulder_level_thresh = 20
+
+    # Detect posture issues
+    issues = []
+    if ear_height_diff > ear_level_thresh:
+        issues.append("Head Tilt Detected")
+    if shoulder_height_diff > shoulder_level_thresh:
+        issues.append("Shoulders Uneven")
+    if head_height < head_too_low_thresh:
+        issues.append("Head Too Low")
+    if head_height > head_too_far_thresh:
+        issues.append("Head Too Far Forward")
+
+    # Prepare input for model and predict
+    features = np.array([features])
     pred = model.predict(features)[0][0]
     posture_score = int(pred * 100)
 
-    # Return result
+    # Return result with issues
     result = {
         "posture_score": posture_score,
-        "posture_label": "Good Posture" if posture_score > 85 else "Bad Posture"
+        "posture_label": "Good Posture" if posture_score > 85 else "Bad Posture",
+        "posture_issues": issues
     }
 
     return jsonify(result)

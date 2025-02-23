@@ -100,6 +100,7 @@ export interface PostureMeasurementInsert {
     left: number;
     right: number;
   };
+  posture_issues?: string[];
 }
 
 export interface PositionData {

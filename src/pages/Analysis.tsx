@@ -35,7 +35,11 @@ const Analysis = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [detector, setDetector] = useState<poseDetection.PoseDetector | null>(null);
   const [currentScore, setCurrentScore] = useState<number | null>(null);
+  const [postureIssues, setPostureIssues] = useState<string[]>([]);
   const lastMeasurementTime = useRef<number | null>(null);
+  const lastIssuesUpdateTime = useRef<number | null>(null);
+  const lastNotificationTime = useRef<number | null>(null);
+  const notificationSound = useRef<HTMLAudioElement | null>(null);
   const lastMetrics = useRef<PostureMetrics | null>(null);
   
   const startSession = async () => {
@@ -103,7 +107,7 @@ const Analysis = () => {
     }
   };
 
-  const saveMeasurement = async (score: number, positions: PositionData) => {
+  const saveMeasurement = async (score: number, positions: PositionData, issues: string[]) => {
     if (!sessionId) return;
 
     try {
@@ -116,7 +120,8 @@ const Analysis = () => {
         posture_score: score,
         head_position: positions.head,
         shoulder_position: positions.shoulders,
-        spine_alignment: positions.spine
+        spine_alignment: positions.spine,
+        posture_issues: issues
       };
 
       const { error } = await supabase
@@ -220,7 +225,7 @@ const Analysis = () => {
           // Save to database every second
           const now = Date.now();
           if (!lastMeasurementTime.current || now - lastMeasurementTime.current >= 1000) {
-            await saveMeasurement(score, positions);
+            await saveMeasurement(score, positions, postureIssues);
             lastMeasurementTime.current = now;
           }
         }
@@ -283,6 +288,38 @@ const Analysis = () => {
         }
 
         const result = await response.json();
+        setCurrentScore(result.posture_score);
+        
+        // Check for low score and show notification
+        const now = Date.now();
+        if (result.posture_score < 60 && (!lastNotificationTime.current || now - lastNotificationTime.current >= 10000)) {
+          // Play notification sound
+          notificationSound.current?.play().catch(err => console.error('Error playing sound:', err));
+          
+          toast({
+            variant: "destructive",
+            title: "⚠️ Poor Posture Alert!",
+            description: (
+              <div className="space-y-2">
+                <p className="font-bold text-lg">Score: {result.posture_score}</p>
+                <p>Please adjust your position:</p>
+                <ul className="list-disc pl-4">
+                  {result.posture_issues.map((issue, index) => (
+                    <li key={index}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            ),
+            duration: 5000, // Show for 5 seconds
+          });
+          lastNotificationTime.current = now;
+        }
+        
+        // Update posture issues every 2 seconds
+        if (!lastIssuesUpdateTime.current || now - lastIssuesUpdateTime.current >= 2000) {
+          setPostureIssues(result.posture_issues);
+          lastIssuesUpdateTime.current = now;
+        }
         return result.posture_score;
       } catch (error) {
         console.error('Error getting posture score from API:', error);
@@ -311,6 +348,12 @@ const Analysis = () => {
     };
   };
 
+  // Initialize notification sound
+  useEffect(() => {
+    notificationSound.current = new Audio('/notification.mp3');
+    notificationSound.current.volume = 0.5;
+  }, []);
+
   return (
     <div className="max-w-screen-xl mx-auto px-4 py-8">
       <div className="flex flex-col items-center space-y-6">
@@ -320,7 +363,16 @@ const Analysis = () => {
           <Card className="w-full max-w-3xl p-6 mb-4">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-semibold">Current Posture Score</h2>
-              <span className="text-4xl font-bold text-primary">{currentScore}</span>
+              <span 
+                className={`text-4xl font-bold ${
+                  currentScore >= 90 ? 'text-green-500' :
+                  currentScore >= 80 ? 'text-yellow-500' :
+                  currentScore >= 70 ? 'text-orange-500' :
+                  'text-red-500'
+                }`}
+              >
+                {currentScore}
+              </span>
             </div>
           </Card>
         )}
