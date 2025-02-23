@@ -8,7 +8,7 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # Load TensorFlow model
-model = tf.keras.models.load_model("posture_model.h5")  # Change if needed
+model = tf.keras.models.load_model("src/model/posture_model.h5")  # Change if needed
 
 # Function to calculate 2D distance
 def distance2D(x1, y1, x2, y2):
